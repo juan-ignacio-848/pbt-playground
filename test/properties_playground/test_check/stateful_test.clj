@@ -54,7 +54,70 @@
                 (let [counter (sut/new-counter)
                       model   (reduce apply-score-model-op 0 ops)]
                   (doseq [op ops]
-                    (try 
+                    (try
                       (apply-score-op counter op)
                       (catch Throwable _)))
                   (= model (sut/value counter)))))
+
+;; Key value storage
+;; Operations: kv-put, kv-del, kv-get, kv-clr
+(defn gen-put [gen-key gen-val]
+  (gen/tuple (gen/return :put) gen-key gen-val))
+
+(defn gen-get [gen-key]
+  (gen/tuple (gen/return :get) gen-key))
+
+(defn gen-del [gen-key]
+  (gen/tuple (gen/return :del) gen-key))
+
+(def gen-clr (gen/tuple (gen/return :clr)))
+
+(defn gen-kv-op [gen-key gen-val]
+  (gen/one-of [(gen-put gen-key gen-val)
+               (gen-get gen-key)
+               (gen-del gen-key)
+               gen-clr]))
+
+(defn apply-kvs-model-op [model [op k v]]
+  (case op
+    :clr {:not-deleted {}
+          :deleted     #{}}
+    :put {:not-deleted (assoc (:not-deleted model) k v)
+          :deleted     (disj (:deleted model #{}) k)}
+    :get (get (:not-deleted model) k)
+    :del {:not-delted (dissoc (:not-deleted model) k)
+          :deleted    (conj (:deleted model #{}) k)}
+    ))
+
+(defn apply-kvs-op [kvs [op k v]]
+  (case op
+    :clr (sut/kv-clr kvs)
+    :put (sut/kv-put kvs k v)
+    :get (sut/kv-get kvs k)
+    :del (sut/kv-del kvs k)))
+
+(defspec kvs-model-test
+  (prop/for-all [ops (gen/vector (gen-kv-op gen/keyword gen/string))]
+                (let [model (reduce apply-kvs-model-op {} ops)
+                      kvs   (sut/new-kvs)]
+                  (doseq [op ops]
+                    (apply-kvs-op kvs op))
+                  (every? (fn [[k v]]
+                            (= (sut/kv-get kvs k) v))
+                          (:not-deleted model))
+                  (every? (fn [k]
+                            (nil? (sut/kv-get kvs k)))
+                          (:deleted model)))))
+
+(comment
+  (reduce apply-kvs-model-op {} [[:put :a 3] [:put :b 3] [:put :a 8] [:del :b] [:clr]])
+  (apply-kvs-model-op {} [:clr])
+  (apply-kvs-model-op {} [:put :a 3])
+  (apply-kvs-model-op {:a 5} [:get :a])
+  (apply-kvs-model-op {:a 2 :b 3} [:del :a])
+  (gen/sample (gen-kv-op gen/nat gen/string))
+  (gen/sample (gen-get gen/nat))
+  (gen/sample (gen-del gen/nat))
+  (gen/sample gen-clr)
+  (gen/sample (gen-put gen/nat gen/string))
+  )
